@@ -2,6 +2,7 @@
 #include "ReplacementPolicy.hpp"
 #include <deque>
 #include <unordered_map>
+#include <optional>
 
 // ─── ClockPolicy (Second Chance) ─────────────────────────────────────────────
 //
@@ -10,9 +11,6 @@
 // Un ciclo completo recorre TODO el anillo UNA vez:
 //   - Páginas con R=1: se limpia R→0 (segunda oportunidad)
 //   - Primera página con R=0 que encuentre: queda como víctima (hand_ apunta ahí)
-//
-// Diferencia con versión anterior: el ciclo siempre recorre el anillo completo
-// una vez, limpiando todos los R=1, en lugar de detenerse en el primer R=0.
 //
 class ClockPolicy final : public ReplacementPolicy {
 public:
@@ -35,27 +33,32 @@ private:
 
     // Un ciclo de reloj: recorre el anillo completo una vez.
     // Limpia R=1 en todas las páginas que encuentra.
-    // Al terminar, hand_ apunta a la primera página con R=0 (víctima).
+    // Al terminar, hand_ apunta a la primera página con R=0 original,
+    // o avanza una posición si todas tuvieron segunda oportunidad.
     void runCycle() {
         if (ring_.empty()) return;
         ++clockCycles_;
 
         size_t n = ring_.size();
+        std::optional<size_t> first_r0;
 
-        // Primera pasada: limpiar todos los R=1 encontrados,
-        // detenerse en el primero con R=0 (esa es la víctima).
         for (size_t i = 0; i < n; ++i) {
-            size_t pos = hand_ % n;
+            size_t pos = (hand_ + i) % n;
             if (ring_[pos].R) {
                 ring_[pos].R = false;   // segunda oportunidad
-                hand_ = (hand_ + 1) % n;
-            } else {
-                // hand_ ya apunta a la víctima (R=0), terminar
-                return;
+            } else if (!first_r0) {
+                first_r0 = pos;         // guarda la primera con R=0 original
             }
         }
-        // Si todas tenían R=1, hand_ dio la vuelta completa.
-        // Ahora todas tienen R=0; hand_ apunta a la víctima correcta.
+
+        if (first_r0) {
+            hand_ = *first_r0;
+        } else {
+            // Si TODAS las páginas tenían R=1 y fueron limpiadas,
+            // forzamos al puntero a avanzar una posición.
+            // Así evitamos que se estanque eternamente en P1.
+            hand_ = (hand_ + 1) % n;
+        }
     }
 
     void countRef() {
