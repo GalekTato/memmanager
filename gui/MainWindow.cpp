@@ -3,7 +3,7 @@
 #include <cmath>
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
-    setWindowTitle("OS Virtual Memory Manager // Bitmap, Swap & Processes");
+    setWindowTitle("Administrador de memoria virtual");
     setMinimumSize(1200, 800);
     resize(1366, 768);
 
@@ -15,7 +15,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(refreshTimer_, &QTimer::timeout, this, &MainWindow::onRefreshTimer);
     refreshTimer_->start(500);
 
-    addLog("Sistema Operativo Iniciado - Memoria Virtual y Swap listos", "#a6e3a1");
+    addLog("Administrrador-Inicio", "#a6e3a1");
 }
 
 void MainWindow::setupStyleSheet() {
@@ -38,7 +38,7 @@ void MainWindow::setupUI() {
     setCentralWidget(central);
     auto* rootLayout = new QVBoxLayout(central);
     
-    auto* titleLbl = new QLabel("OS VIRTUAL MEMORY MANAGER  //  BITMAP & SWAP DISPATCHER");
+    auto* titleLbl = new QLabel("ADMINISTRADOR DE MEMORIA VIRTUAL");
     titleLbl->setStyleSheet("color:#89b4fa; font-size:15px; font-weight:bold; letter-spacing:2px;");
     rootLayout->addWidget(titleLbl);
 
@@ -87,7 +87,7 @@ QGroupBox* MainWindow::makeStatsPanel() {
 }
 
 QGroupBox* MainWindow::makeControlPanel() {
-    auto* grp = new QGroupBox("DESPACHADOR DE PROCESOS");
+    auto* grp = new QGroupBox("PROCESOS");
     auto* lay = new QVBoxLayout(grp);
 
     auto* createLay = new QGridLayout;
@@ -112,7 +112,7 @@ QGroupBox* MainWindow::makeControlPanel() {
 
     auto* termLay = new QHBoxLayout;
     termPidSpin_ = new QSpinBox; termPidSpin_->setRange(1, 9999); termPidSpin_->setPrefix("PID: ");
-    termBtn_ = new QPushButton("Terminar (Kill)");
+    termBtn_ = new QPushButton("Kill");
     termBtn_->setStyleSheet("color: #f38ba8; border-color: #f38ba8;");
     termLay->addWidget(termPidSpin_); termLay->addWidget(termBtn_);
     lay->addLayout(termLay);
@@ -120,7 +120,7 @@ QGroupBox* MainWindow::makeControlPanel() {
 
     auto* cfgLay = new QHBoxLayout;
     capacitySpin_ = new QSpinBox; capacitySpin_->setRange(16, 4096); capacitySpin_->setValue(256);
-    ramSpin_ = new QSpinBox; ramSpin_->setRange(4, 4096); ramSpin_->setValue(16); // Valor por defecto 16
+    ramSpin_ = new QSpinBox; ramSpin_->setRange(4, 4096); ramSpin_->setValue(16);
     cfgLay->addWidget(new QLabel("VM Total:")); cfgLay->addWidget(capacitySpin_, 1);
     cfgLay->addWidget(new QLabel("MF Total:")); cfgLay->addWidget(ramSpin_, 1);
     lay->addLayout(cfgLay);
@@ -136,7 +136,7 @@ QGroupBox* MainWindow::makeControlPanel() {
 }
 
 QGroupBox* MainWindow::makeVMPanel() {
-    auto* grp = new QGroupBox("MAPA DE BITS (Memoria Virtual Global)");
+    auto* grp = new QGroupBox("Memoria Virtual Global");
     auto* lay = new QVBoxLayout(grp);
     vmGrid_ = new QTableWidget;
     vmGrid_->horizontalHeader()->setVisible(false);
@@ -148,7 +148,7 @@ QGroupBox* MainWindow::makeVMPanel() {
 }
 
 QGroupBox* MainWindow::makeProcessPanel() {
-    auto* grp = new QGroupBox("TABLAS DE PÁGINAS (Por Proceso)");
+    auto* grp = new QGroupBox("TABLAS DE PÁGINA DE PROCESOS");
     auto* lay = new QVBoxLayout(grp);
     
     procTable_ = new QTableWidget(0, 2);
@@ -159,9 +159,8 @@ QGroupBox* MainWindow::makeProcessPanel() {
     procTable_->setEditTriggers(QAbstractItemView::NoEditTriggers); 
     lay->addWidget(procTable_, 1);
 
-    // NUEVA TABLA DE 4 COLUMNAS PARA VER EL SWAP Y LOS BITS
     localPageTable_ = new QTableWidget(0, 4);
-    localPageTable_->setHorizontalHeaderLabels({"Pg Lógica", "Pg Virtual", "Ubicación", "Bits CAR"});
+    localPageTable_->setHorizontalHeaderLabels({"Pg Lógica", "Pg Virtual", "Ubicación", "Bits de control"});
     localPageTable_->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     localPageTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     lay->addWidget(new QLabel("Traducción del proceso seleccionado:"));
@@ -173,7 +172,7 @@ QGroupBox* MainWindow::makeProcessPanel() {
 }
 
 QGroupBox* MainWindow::makeLogPanel() {
-    auto* grp = new QGroupBox("REGISTRO DEL SO");
+    auto* grp = new QGroupBox("LOG");
     auto* lay = new QVBoxLayout(grp);
     logEdit_ = new QTextEdit; logEdit_->setReadOnly(true);
     lay->addWidget(logEdit_);
@@ -227,7 +226,7 @@ void MainWindow::onTerminateProcess() {
     if (!mm_) return;
     int pid = termPidSpin_->value();
     mm_->terminateProcess(pid);
-    addLog(QString("TERMINADO: PID %1 destruido. RAM y Swap liberados.").arg(pid), "#f9e2af");
+    addLog(QString("TERMINADO: PID %1 evictado. RAM y Swap liberados.").arg(pid), "#f9e2af");
     refreshAll();
 }
 
@@ -250,7 +249,7 @@ void MainWindow::refreshStats() {
     freePagesLbl_->setText(QString("VM Libres: %1").arg(vmFree));
     
     // Mostramos también la RAM real usada
-    occPagesLbl_->setText(QString("RAM Física: %1 / %2").arg(mm_->getRamUsed()).arg(mm_->getRamCapacity()));
+    occPagesLbl_->setText(QString("MF: %1 / %2").arg(mm_->getRamUsed()).arg(mm_->getRamCapacity()));
     activeProcsLbl_->setText(QString("Procesos Activos: %1").arg(mm_->getProcesses().size()));
 }
 
@@ -288,14 +287,14 @@ void MainWindow::refreshVMGrid() {
             int ownerPid = reverseMap[i];
             QColor color = getProcessColor(ownerPid);
             
-            // OSCURECER SI ESTÁ EN DISCO (SWAP)
+
             if (!mm_->isPageInRam(i)) {
                 color.setAlpha(60); 
                 item->setText("SWP");
                 item->setForeground(QColor("#a6adc8"));
             } else {
                 item->setText(QString::number(ownerPid)); 
-                item->setForeground(QColor("#11111b")); // Letra negra para alto contraste
+                item->setForeground(QColor("#11111b"));
             }
             
             item->setBackground(color);
@@ -345,7 +344,6 @@ void MainWindow::onProcessSelectionChanged() {
             locItem->setForeground(inRam ? QColor("#a6e3a1") : QColor("#bac2de"));
             localPageTable_->setItem(row, 2, locItem);
             
-            // EL ESPIONAJE DE BITS
             QString bitInfo = QString::fromStdString(mm_->policy()->getPageInfo(global));
             auto* bitItem = new QTableWidgetItem(bitInfo);
             bitItem->setForeground(QColor("#f9e2af"));

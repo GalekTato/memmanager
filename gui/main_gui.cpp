@@ -7,7 +7,6 @@ int main(int argc, char* argv[]) {
     app.setApplicationName("Memory Manager");
     app.setApplicationVersion("1.0");
 
-    // Try to use a monospace font
     QFont font("JetBrains Mono", 10);
     if (!font.exactMatch()) font.setFamily("Fira Code");
     if (!font.exactMatch()) font.setFamily("Monospace");
