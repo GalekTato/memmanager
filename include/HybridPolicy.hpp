@@ -118,6 +118,14 @@ public:
         return out;
     }
 
+    std::string getPageInfo(PageID pid) override {
+        for (const auto& e : T1_) if (e.pid == pid) return "T1 (R=" + std::to_string(e.R) + ")";
+        for (const auto& e : T2_) if (e.pid == pid) return "T2 (R=" + std::to_string(e.R) + ")";
+        for (auto id : B1_) if (id == pid) return "Swap/B1 (Fantasma)";
+        for (auto id : B2_) if (id == pid) return "Swap/B2 (Fantasma)";
+        return "En Swap (Disco)";
+    }
+
     // Funciones de introspección para la GUI
     size_t t1Size() const { return T1_.size(); }
     size_t t2Size() const { return T2_.size(); }

@@ -1,205 +1,110 @@
 #pragma once
-#include "Page.hpp"
-#include "ReplacementPolicy.hpp"
 #include <vector>
 #include <unordered_map>
 #include <memory>
 #include <optional>
-#include <functional>
-#include <atomic>
-#include <mutex>
+#include "Process.hpp"
+#include "ReplacementPolicy.hpp"
 
-// ─── MemoryManager ────────────────────────────────────────────────────────────
-// Buffer-pool style manager inspired by VMCache:
-//  - Fixed pool of frames (physical memory)
-//  - Pluggable replacement policy (LRU / Clock / ARC)
-//  - Tracks hits, misses, evictions, dirty writes
-//
-// VMCache influence: version-latched frames (optimistic concurrency),
-// eviction driven by policy, not simple FIFO.
 class MemoryManager {
-public:
-    // ── Statistics ────────────────────────────────────────────────────────────
-    struct Stats {
-        std::atomic<uint64_t> hits     {0};
-        std::atomic<uint64_t> misses   {0};
-        std::atomic<uint64_t> evictions{0};
-        std::atomic<uint64_t> dirtyW   {0};   // dirty-page write-backs
-
-        double hitRate() const {
-            auto total = hits + misses;
-            return total ? (double)hits / total * 100.0 : 0.0;
-        }
-
-        void reset() { hits=0; misses=0; evictions=0; dirtyW=0; }
-    };
-
 private:
-    size_t                                         capacity_;
-    std::vector<Frame>                             frames_;
-    std::unordered_map<PageID, FrameID>            pageTable_;   // page→frame
-    std::unique_ptr<ReplacementPolicy>             policy_;
-    Stats                                          stats_;
-    mutable std::mutex                             mtx_;
+    size_t virtualCapacity_;
+    size_t freeVirtualPages_;
+    
+    size_t ramCapacity_; // Límite de la Memoria Física (Para forzar el reemplazo)
+    size_t ramUsed_;
 
-    // Version latch per frame (VMCache-style optimistic concurrency hint)
-    std::vector<std::atomic<uint32_t>>             versions_;
-
-    // Optional "disk" read/write hooks (simulate I/O)
-    std::function<Page(PageID)>                    onPageIn_;
-    std::function<void(const Page&)>               onPageOut_;
-
-    // ── Internal helpers ──────────────────────────────────────────────────────
-    std::optional<FrameID> freeFrame() const {
-        for (auto& f : frames_)
-            if (!f.occupied) return f.id;
-        return std::nullopt;
-    }
-
-    void evictOne() {
-        auto vic = policy_->victim();
-        if (!vic) return;
-
-        auto it = pageTable_.find(*vic);
-        if (it == pageTable_.end()) return;
-
-        FrameID fid  = it->second;
-        Frame&  frame = frames_[fid];
-
-        if (frame.page.dirty) {
-            if (onPageOut_) onPageOut_(frame.page);
-            ++stats_.dirtyW;
-        }
-
-        policy_->onEvict(*vic);
-        pageTable_.erase(it);
-        versions_[fid].fetch_add(1, std::memory_order_relaxed);
-        frame.evict();
-        ++stats_.evictions;
-    }
+    std::vector<bool> bitmap_; // Ocupación de Memoria Virtual
+    std::vector<bool> inRam_;  // ¿Está cargada en la RAM física o en el Disco (Swap)?
+    
+    std::unordered_map<int, Process> processes_;
+    std::unique_ptr<ReplacementPolicy> policy_;
 
 public:
-    MemoryManager(size_t capacity,
-                  std::unique_ptr<ReplacementPolicy> policy)
-        : capacity_(capacity)
-        , frames_(capacity)
-        , policy_(std::move(policy))
-        , versions_(capacity)
-    {
-        for (size_t i = 0; i < capacity; ++i) frames_[i].id = static_cast<FrameID>(i);
+    explicit MemoryManager(size_t virtualCapacity, size_t ramCapacity, std::unique_ptr<ReplacementPolicy> policy)
+        : virtualCapacity_(virtualCapacity), freeVirtualPages_(virtualCapacity), 
+          ramCapacity_(ramCapacity), ramUsed_(0), policy_(std::move(policy)) {
+        bitmap_.resize(virtualCapacity_, false); 
+        inRam_.resize(virtualCapacity_, false);
     }
 
-    // ── Configuration ─────────────────────────────────────────────────────────
-    void setPageInHook (std::function<Page(PageID)>       f) { onPageIn_  = f; }
-    void setPageOutHook(std::function<void(const Page&)>  f) { onPageOut_ = f; }
+    bool admitProcess(int pid, size_t requiredPages) {
+        if (processes_.find(pid) != processes_.end() || requiredPages > freeVirtualPages_) return false; 
 
-    void setPolicy(std::unique_ptr<ReplacementPolicy> p) {
-        std::lock_guard lk(mtx_);
-        policy_ = std::move(p);
-        // Re-register all pages currently in memory so the new policy
-        // knows about them and can compute ranks/order correctly.
-        for (auto& [pid, fid] : pageTable_) {
-            policy_->onLoad(pid);
-        }
-    }
-
-    // ── Core API ──────────────────────────────────────────────────────────────
-
-    // Access a page: returns reference to the in-memory frame's page.
-    // Returns nullptr if something went wrong.
-    Page* access(PageID pid) {
-        std::lock_guard lk(mtx_);
-
-        if (auto it = pageTable_.find(pid); it != pageTable_.end()) {
-            ++stats_.hits;
-            Frame& f = frames_[it->second];
-            f.page.touch();
-            policy_->onAccess(pid);
-            return &f.page;
-        }
-
-        // Miss: load page
-        ++stats_.misses;
-        if (!freeFrame()) evictOne();
-
-        auto freeOpt = freeFrame();
-        if (!freeOpt) return nullptr;  // should not happen
-
-        FrameID fid = *freeOpt;
-        Frame&  f   = frames_[fid];
-
-        Page newPage = onPageIn_ ? onPageIn_(pid) : Page(pid);
-        newPage.touch();
-        f.load(newPage);
-        pageTable_[pid] = fid;
-        policy_->onLoad(pid);
-
-        return &f.page;
-    }
-
-    // Mark a page as dirty (modified)
-    bool markDirty(PageID pid) {
-        std::lock_guard lk(mtx_);
-        if (auto it = pageTable_.find(pid); it != pageTable_.end()) {
-            frames_[it->second].page.dirty = true;
-            return true;
-        }
-        return false;
-    }
-
-    // Flush a specific page to "disk"
-    bool flush(PageID pid) {
-        std::lock_guard lk(mtx_);
-        if (auto it = pageTable_.find(pid); it != pageTable_.end()) {
-            auto& pg = frames_[it->second].page;
-            if (pg.dirty) {
-                if (onPageOut_) onPageOut_(pg);
-                pg.dirty = false;
-                ++stats_.dirtyW;
+        Process newProc(pid, requiredPages);
+        size_t pagesAssigned = 0;
+        
+        // BÚSQUEDA Y DESPACHO (First-Fit en Memoria Virtual)
+        for (size_t globalVirtualPage = 0; globalVirtualPage < virtualCapacity_ && pagesAssigned < requiredPages; ++globalVirtualPage) {
+            if (!bitmap_[globalVirtualPage]) {
+                bitmap_[globalVirtualPage] = true;
+                newProc.mapPage(pagesAssigned, globalVirtualPage); 
+                pagesAssigned++;
+                freeVirtualPages_--;
             }
-            return true;
         }
-        return false;
+        processes_.emplace(pid, newProc);
+        return true; 
     }
 
-    // Force-evict a page
-    bool evict(PageID pid) {
-        std::lock_guard lk(mtx_);
-        auto it = pageTable_.find(pid);
-        if (it == pageTable_.end()) return false;
-        FrameID fid = it->second;
-        Frame& frame = frames_[fid];
-        if (frame.page.dirty && onPageOut_) onPageOut_(frame.page);
-        policy_->onEvict(pid);
-        pageTable_.erase(it);
-        versions_[fid].fetch_add(1, std::memory_order_relaxed);
-        frame.evict();
-        ++stats_.evictions;
-        return true;
+    void terminateProcess(int pid) {
+        auto it = processes_.find(pid);
+        if (it != processes_.end()) {
+            for (const auto& [localPage, globalVirtualPage] : it->second.getPageTable()) {
+                bitmap_[globalVirtualPage] = false; // Liberar Virtual
+                if (inRam_[globalVirtualPage]) {
+                    inRam_[globalVirtualPage] = false; // Liberar RAM
+                    ramUsed_--;
+                    if (policy_) policy_->onEvict(globalVirtualPage);
+                }
+                freeVirtualPages_++;
+            }
+            processes_.erase(it);
+        }
     }
 
-    // ── Introspection ─────────────────────────────────────────────────────────
-    const Stats&  stats()    const { return stats_; }
-    void          resetStats()     { stats_.reset(); }
-    size_t        capacity() const { return capacity_; }
-    size_t        used()     const { return pageTable_.size(); }
-    size_t        free()     const { return capacity_ - pageTable_.size(); }
-    std::string policyName() const { return policy_->name(); }
+    // Retorna: 1 (Hit en RAM), 2 (Page Fault / Traído de Swap), 0 (Segfault / Error)
+    int accessProcessPage(int pid, size_t localPage) {
+        auto it = processes_.find(pid);
+        if (it == processes_.end()) return 0;
 
-    // Snapshot of frames for display
-    std::vector<std::pair<FrameID,Page>> snapshot() const {
-        std::lock_guard lk(mtx_);
-        std::vector<std::pair<FrameID,Page>> out;
-        for (auto& f : frames_)
-            if (f.occupied) out.emplace_back(f.id, f.page);
-        return out;
+        size_t globalVirtualPage;
+        if (it->second.getGlobalPage(localPage, globalVirtualPage)) {
+            
+            if (inRam_[globalVirtualPage]) {
+                // HIT: Ya estaba en RAM
+                if (policy_) policy_->onAccess(globalVirtualPage);
+                return 1; 
+            } else {
+                // PAGE FAULT (Fallo de página): Traer del disco a la RAM
+                if (ramUsed_ >= ramCapacity_) {
+                    // ALGORTIMO DE REEMPLAZO: RAM LLENA, Buscar Víctima
+                    if (policy_) {
+                        auto vicOpt = policy_->victim();
+                        if (vicOpt.has_value()) {
+                            size_t victimPage = vicOpt.value();
+                            inRam_[victimPage] = false; // Mandar víctima al Swap (Disco)
+                            policy_->onEvict(victimPage);
+                        }
+                    }
+                } else {
+                    ramUsed_++; // Aún hay espacio en RAM
+                }
+                
+                inRam_[globalVirtualPage] = true; // Cargar nueva a RAM
+                if (policy_) policy_->onLoad(globalVirtualPage);
+                return 2; 
+            }
+        }
+        return 0; // Segfault
     }
 
-    // Policy's internal order (for visualisation)
-    std::vector<PageID> policyOrder() const {
-        std::lock_guard lk(mtx_);
-        return policy_->order();
-    }
-
+    size_t getVirtualCapacity() const { return virtualCapacity_; }
+    size_t getFreeVirtualPages() const { return freeVirtualPages_; }
+    size_t getRamCapacity() const { return ramCapacity_; }
+    size_t getRamUsed() const { return ramUsed_; }
+    const std::vector<bool>& getBitmap() const { return bitmap_; }
+    bool isPageInRam(size_t vPage) const { return inRam_[vPage]; }
+    const std::unordered_map<int, Process>& getProcesses() const { return processes_; }
     ReplacementPolicy* policy() const { return policy_.get(); }
 };

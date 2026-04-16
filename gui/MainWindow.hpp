@@ -3,7 +3,6 @@
 #include <QTimer>
 #include <QLabel>
 #include <QPushButton>
-#include <QLineEdit>
 #include <QSpinBox>
 #include <QTextEdit>
 #include <QProgressBar>
@@ -13,7 +12,7 @@
 #include <QHBoxLayout>
 #include <QGridLayout>
 #include <QSplitter>
-#include <QFrame>
+#include <QHeaderView>
 
 #include "../include/MemoryManager.hpp"
 #include "../include/HybridPolicy.hpp"
@@ -26,61 +25,55 @@ public:
     ~MainWindow() override = default;
 
 private slots:
-    void onAccess();
-    void onMarkDirty();
-    void onEvict();
-    void onFlush();
-    void onResetStats();
-    void onFramesChanged(int value);
+    void onCreateProcess();
+    void onAccessPage();
+    void onTerminateProcess();
+    void onCapacityChanged(int value);
     void onRefreshTimer();
+    void onProcessSelectionChanged();
 
 private:
     void setupUI();
     void setupStyleSheet();
     QGroupBox* makeStatsPanel();
-    QGroupBox* makeFramePanel();
-    QGroupBox* makeClockPanel();
     QGroupBox* makeControlPanel();
+    QGroupBox* makeVMPanel();
+    QGroupBox* makeProcessPanel();
     QGroupBox* makeLogPanel();
 
     void refreshAll();
     void refreshStats();
-    void refreshFrames();
-    void refreshClock();
-    void addLog(const QString& msg, const QString& color = "#00e5ff");
+    void refreshVMGrid();
+    void refreshProcessList();
+    void addLog(const QString& msg, const QString& color = "#89b4fa");
     void rebuildManager();
+    QColor getProcessColor(int pid);
 
     std::unique_ptr<MemoryManager> mm_;
-
     QTimer* refreshTimer_;
-    QProgressBar* hitRateBar_;
+
     QProgressBar* occupancyBar_;
-    QLabel* hitsLbl_;
-    QLabel* missesLbl_;
-    QLabel* evictLbl_;
-    QLabel* dirtyWLbl_;
-    QLabel* hitRateLbl_;
+    QLabel* freePagesLbl_;
+    QLabel* occPagesLbl_;
+    QLabel* activeProcsLbl_;
 
-    QGroupBox* arcGroup_;
-    QLabel* arcT1Lbl_;
-    QLabel* arcT2Lbl_;
-    QLabel* arcB1Lbl_;
-    QLabel* arcB2Lbl_;
-    QLabel* arcPLbl_;
+    QTableWidget* vmGrid_;
+    QTableWidget* procTable_;
+    QTableWidget* localPageTable_;
 
-    QGroupBox* clockGroup_;
-    QLabel* clockCyclesLbl_;
-    QLabel* clockRefsLbl_;
-    QLabel* clockNextLbl_;
-    QProgressBar* clockCycleBar_;
+    QSpinBox* newPidSpin_;
+    QSpinBox* reqPagesSpin_;
+    QPushButton* createBtn_;
 
-    QTableWidget* frameTable_;
-    QSpinBox* pageIdSpin_;
-    QSpinBox* framesSpin_;
+    QSpinBox* accessPidSpin_;
+    QSpinBox* logicalPageSpin_;
     QPushButton* accessBtn_;
-    QPushButton* dirtyBtn_;
-    QPushButton* evictBtn_;
-    QPushButton* flushBtn_;
-    QPushButton* resetBtn_;
+
+    QSpinBox* termPidSpin_;
+    QPushButton* termBtn_;
+
+    QSpinBox* capacitySpin_;
     QTextEdit* logEdit_;
+
+    QSpinBox* ramSpin_;
 };

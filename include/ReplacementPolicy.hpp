@@ -26,4 +26,6 @@ public:
 
     // Ordered list of page IDs currently tracked (for display)
     virtual std::vector<PageID> order() const = 0;
+    
+    virtual std::string getPageInfo(PageID /*pid*/) { return "N/A"; }
 };

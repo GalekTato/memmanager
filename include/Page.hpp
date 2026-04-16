@@ -3,15 +3,18 @@
 #include <string>
 #include <chrono>
 
-using PageID  = uint32_t;
-using FrameID = uint32_t;
+// En el nuevo paradigma de SO, PageID representa el ID de la Página Virtual Global
+using PageID = uint32_t;
 
 // ─── Page ────────────────────────────────────────────────────────────────────
+// Representa una página individual. 
+// Conservamos sus atributos lógicos (dirty, referenciada) por si en el futuro 
+// necesitas implementar algoritmos de Swap hacia el disco duro.
 struct Page {
     PageID  id;
     bool    dirty      = false;
-    bool    referenced = false;          // Clock bit
-    uint32_t frequency = 0;             // LFU / ARC use
+    bool    referenced = false;          
+    uint32_t frequency = 0;             
     std::chrono::steady_clock::time_point last_access{};
 
     explicit Page(PageID pid = 0) : id(pid) {
@@ -26,24 +29,5 @@ struct Page {
 
     std::string toString() const {
         return "P" + std::to_string(id);
-    }
-};
-
-// ─── Frame ───────────────────────────────────────────────────────────────────
-struct Frame {
-    FrameID id;
-    bool    occupied = false;
-    Page    page{};
-
-    explicit Frame(FrameID fid = 0) : id(fid) {}
-
-    void load(const Page& p) {
-        page     = p;
-        occupied = true;
-    }
-
-    void evict() {
-        occupied = false;
-        page     = Page{};
     }
 };
