@@ -11,11 +11,11 @@ private:
     size_t virtualCapacity_;
     size_t freeVirtualPages_;
     
-    size_t ramCapacity_; // Límite de la Memoria Física (Para forzar el reemplazo)
+    size_t ramCapacity_; 
     size_t ramUsed_;
 
     std::vector<bool> bitmap_; // Ocupación de Memoria Virtual
-    std::vector<bool> inRam_;  // ¿Está cargada en la RAM física o en el Disco (Swap)?
+    std::vector<bool> inRam_;  
     
     std::unordered_map<int, Process> processes_;
     std::unique_ptr<ReplacementPolicy> policy_;

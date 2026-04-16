@@ -3,13 +3,9 @@
 #include <string>
 #include <chrono>
 
-// En el nuevo paradigma de SO, PageID representa el ID de la Página Virtual Global
+
 using PageID = uint32_t;
 
-// ─── Page ────────────────────────────────────────────────────────────────────
-// Representa una página individual. 
-// Conservamos sus atributos lógicos (dirty, referenciada) por si en el futuro 
-// necesitas implementar algoritmos de Swap hacia el disco duro.
 struct Page {
     PageID  id;
     bool    dirty      = false;
