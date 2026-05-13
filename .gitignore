@@ -20,7 +20,6 @@ moc_*
 *.out
 *.fls
 *.fdb_latexmk
-*.pdf
 
 # Editor/OS files
 .directory
