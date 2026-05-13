@@ -8,7 +8,8 @@ INCLUDEPATH += ../include
 HEADERS += MainWindow.hpp
 
 SOURCES += main_gui.cpp \
-           MainWindow.cpp
+           MainWindow.cpp \
+           ../include/Dispatcher.cpp
 
 # Silence deprecation warnings from Qt internals
 DEFINES += QT_DEPRECATED_WARNINGS

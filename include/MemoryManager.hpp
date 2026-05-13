@@ -3,10 +3,18 @@
 #include <unordered_map>
 #include <memory>
 #include <optional>
+#include <string>
+#include <sstream>
 #include "Process.hpp"
 #include "ReplacementPolicy.hpp"
 
 class MemoryManager {
+public:
+    struct Reference {
+        int pid;
+        size_t localPage;
+    };
+
 private:
     size_t virtualCapacity_;
     size_t freeVirtualPages_;
@@ -20,12 +28,58 @@ private:
     std::unordered_map<int, Process> processes_;
     std::unique_ptr<ReplacementPolicy> policy_;
 
+    std::vector<Reference> referenceList_;
+    size_t nextReferenceIndex_ = 0;
+
 public:
     explicit MemoryManager(size_t virtualCapacity, size_t ramCapacity, std::unique_ptr<ReplacementPolicy> policy)
         : virtualCapacity_(virtualCapacity), freeVirtualPages_(virtualCapacity), 
           ramCapacity_(ramCapacity), ramUsed_(0), policy_(std::move(policy)) {
         bitmap_.resize(virtualCapacity_, false); 
         inRam_.resize(virtualCapacity_, false);
+    }
+
+    void addReference(int pid, size_t localPage) {
+        if (!referenceList_.empty()) {
+            const auto& last = referenceList_.back();
+            if (last.pid == pid && last.localPage == localPage) {
+                return; // COMPRESIÓN: Ignorar accesos consecutivos idénticos del mismo proceso
+            }
+        }
+        referenceList_.push_back({pid, localPage});
+    }
+
+    void addReferenceString(int pid, const std::string& s) {
+        std::stringstream ss(s);
+        std::string item;
+        while (std::getline(ss, item, ',')) {
+            if (item.empty()) continue;
+            try {
+                size_t page = std::stoul(item);
+                addReference(pid, page);
+            } catch (...) {
+                // Ignorar elementos inválidos
+            }
+        }
+    }
+
+    void clearReferences() {
+        referenceList_.clear();
+        nextReferenceIndex_ = 0;
+    }
+
+    const std::vector<Reference>& getReferenceList() const {
+        return referenceList_;
+    }
+
+    size_t getNextReferenceIndex() const {
+        return nextReferenceIndex_;
+    }
+
+    std::optional<int> executeNextReference() {
+        if (nextReferenceIndex_ >= referenceList_.size()) return std::nullopt;
+        const auto& ref = referenceList_[nextReferenceIndex_++];
+        return accessProcessPage(ref.pid, ref.localPage);
     }
 
     bool admitProcess(int pid, size_t requiredPages) {

@@ -1,0 +1,28 @@
+# Object files
+*.o
+
+# Executables
+gui/memmanager_gui
+network/memserver
+network/memclient
+
+# Qt/QMake generated files
+Makefile
+.qmake.stash
+moc_*
+
+# LaTeX generated files
+*.aux
+*.log
+*.toc
+*.lof
+*.lot
+*.out
+*.fls
+*.fdb_latexmk
+*.pdf
+
+# Editor/OS files
+.directory
+.vscode/
+.idea/
