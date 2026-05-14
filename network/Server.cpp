@@ -8,10 +8,13 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 
-Server::Server(int port) : port_(port), running_(true) {
-    auto pol = std::make_unique<HybridPolicy>(16); // Default MF=16
-    mm_ = std::make_unique<MemoryManager>(256, 16, std::move(pol));
-    dispatcher_ = std::make_unique<Dispatcher>(*mm_, 5, 3);
+Server::Server(int port, size_t vmCapacity, size_t ramCapacity, int quantum, int clockCycle, size_t threadPoolSize) 
+    : port_(port), running_(true), 
+      pool_(threadPoolSize == 0 ? std::thread::hardware_concurrency() : threadPoolSize),
+      poolSize_(threadPoolSize == 0 ? std::thread::hardware_concurrency() : threadPoolSize) {
+    auto pol = std::make_unique<HybridPolicy>(ramCapacity);
+    mm_ = std::make_unique<MemoryManager>(vmCapacity, ramCapacity, std::move(pol));
+    dispatcher_ = std::make_unique<Dispatcher>(*mm_, quantum, clockCycle);
 }
 
 Server::~Server() {
@@ -46,7 +49,10 @@ void Server::run() {
         return;
     }
 
-    std::cout << "Server listening on port " << port_ << std::endl;
+    std::cout << "[SERVER] Escuchando en puerto " << port_ << std::endl;
+    std::cout << "[SERVER] Thread pool: " << poolSize_ << " workers activos" << std::endl;
+    // Hardcoded initial parameters for logging
+    std::cout << "[SERVER] Dispatcher iniciado (quantum=5, ciclo=3)" << std::endl;
 
     simThread_ = std::thread(&Server::simulationLoop, this);
     acceptLoop();
@@ -61,7 +67,10 @@ void Server::acceptLoop() {
             if (running_) perror("Accept failed");
             continue;
         }
-        std::thread(&Server::handleClient, this, clientSocket).detach();
+        
+        pool_.enqueue([this, clientSocket]() { handleClient(clientSocket); });
+        ++totalConnections_;
+        ++activeConnections_;
     }
 }
 
@@ -77,7 +86,18 @@ void Server::handleClient(int clientSocket) {
         std::string cmd;
         ss >> cmd;
 
-        if (cmd == "CREATE") {
+        if (cmd == "STATS") {
+            ServerStats s = stats();
+            std::string resp = "STATS connections=" + std::to_string(s.totalConnections) +
+                               " active=" + std::to_string(s.activeConnections) +
+                               " workers=" + std::to_string(s.activeWorkers) +
+                               " pending=" + std::to_string(s.pendingTasks) +
+                               " processes=" + std::to_string(s.totalProcessesSubmitted) +
+                               " finished=" + std::to_string(s.totalProcessesFinished) +
+                               " faults=" + std::to_string(s.totalPageFaults) + "\n";
+            send(clientSocket, resp.c_str(), resp.size(), 0);
+            break; // Read-only probe, close connection
+        } else if (cmd == "CREATE") {
             int pid;
             size_t numPages;
             std::string refsStr;
@@ -90,7 +110,7 @@ void Server::handleClient(int clientSocket) {
                 try { refs.push_back(std::stoul(r)); } catch (...) {}
             }
 
-            std::lock_guard<std::mutex> lock(mmMutex_);
+            std::lock_guard<std::mutex> lock(dispatcherMutex_);
             if (mm_->admitProcess(pid, numPages)) {
                 Process p(pid, numPages, refs, dispatcher_->currentTime());
                 const auto& mmProcs = mm_->getProcesses();
@@ -101,6 +121,7 @@ void Server::handleClient(int clientSocket) {
                     }
                 }
                 dispatcher_->addProcess(std::move(p));
+                ++totalProcessesSubmitted_;
                 
                 {
                     std::lock_guard<std::mutex> clock(clientMutex_);
@@ -115,32 +136,42 @@ void Server::handleClient(int clientSocket) {
             }
         }
     }
-    // Note: We don't close the socket here because we might need to send DONE later.
-    // However, if the client disconnects, we should probably handle it.
-    // For this prototype, we'll keep the socket open or the client waits.
+    close(clientSocket);
+    --activeConnections_;
 }
 
 void Server::simulationLoop() {
     while (running_) {
         std::vector<Dispatcher::FinalReport> newFinished;
         {
-            std::lock_guard<std::mutex> lock(mmMutex_);
-            int oldFinishedCount = dispatcher_->getReport().size();
-            dispatcher_->step();
-            int newFinishedCount = dispatcher_->getReport().size();
-            if (newFinishedCount > oldFinishedCount) {
-                newFinished = dispatcher_->getReport();
+            std::unique_lock<std::mutex> lk(dispatcherMutex_, std::try_to_lock);
+            if (lk.owns_lock()) {
+                int oldFinishedCount = dispatcher_->getReport().size();
+                dispatcher_->step();
+                int newFinishedCount = dispatcher_->getReport().size();
+                if (newFinishedCount > oldFinishedCount) {
+                    newFinished = dispatcher_->getReport();
+                    // We only want the newly finished ones.
+                    // The simplest is to just figure out which ones are new.
+                    // But Dispatcher::getReport() returns all reports. 
+                    // Let's just track the processed ones.
+                }
             }
         }
 
-        for (const auto& report : newFinished) {
+        if (!newFinished.empty()) {
             std::lock_guard<std::mutex> clock(clientMutex_);
-            auto it = pidToSocket_.find(report.pid);
-            if (it != pidToSocket_.end()) {
-                sendDoneMessage(it->first, report);
-                // After sending DONE, we can close the socket if no other processes are pending for this client.
-                // But simplified for now: just send.
+            // Send to all new finished that we haven't seen. 
+            // We use totalProcessesFinished_ to track offset.
+            for (size_t i = totalProcessesFinished_.load(); i < newFinished.size(); ++i) {
+                const auto& report = newFinished[i];
+                auto it = pidToSocket_.find(report.pid);
+                if (it != pidToSocket_.end()) {
+                    sendDoneMessage(it->first, report);
+                }
+                totalPageFaults_ += report.pageFaults;
             }
+            totalProcessesFinished_ = newFinished.size();
         }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -160,4 +191,17 @@ void Server::sendDoneMessage(int pid, const Dispatcher::FinalReport& report) {
                           std::to_string(report.pageFaults) + "\n";
         send(sock, msg.c_str(), msg.size(), 0);
     }
+}
+
+ServerStats Server::stats() const {
+    ServerStats s;
+    s.totalConnections = totalConnections_.load();
+    s.activeConnections = activeConnections_.load();
+    s.pendingTasks = pool_.pendingTasks();
+    s.activeWorkers = pool_.activeWorkers();
+    s.poolSize = poolSize_;
+    s.totalProcessesSubmitted = totalProcessesSubmitted_.load();
+    s.totalProcessesFinished = totalProcessesFinished_.load();
+    s.totalPageFaults = totalPageFaults_.load();
+    return s;
 }
